@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Atakanın Metronomu</title>
+  <style>
+    :root{
+      --bg:#0f1720; --card:#0b1220; --muted:#9aa6b2; --accent:#5eead4;
+      --glass: rgba(255,255,255,0.04);
+    }
+    *{box-sizing:border-box}
+    body{font-family:Inter,Segoe UI,Roboto,Helvetica,Arial; background:linear-gradient(180deg,var(--bg),#07101a); color:#e6f0f2; margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;}
+    .card{width:380px; background:linear-gradient(180deg,var(--card), rgba(11,18,32,0.7)); border-radius:14px; padding:22px; box-shadow:0 8px 30px rgba(2,6,23,0.6);}
+    h1{font-size:18px; margin:0 0 12px 0; letter-spacing:0.4px}
+    .row{display:flex; gap:12px; align-items:center}
+    .bpm-display{font-weight:700; font-size:28px; line-height:1;}
+    .muted{color:var(--muted); font-size:13px}
+    .slider-wrap{margin:16px 0}
+    input[type=range]{-webkit-appearance:none; width:100%; height:8px; border-radius:999px; background:linear-gradient(90deg,var(--accent),#60a5fa); outline:none}
+    input[type=range]::-webkit-slider-thumb{-webkit-appearance:none; width:18px; height:18px; border-radius:50%; background:white; box-shadow:0 2px 6px rgba(0,0,0,0.4)}
+    .controls{display:flex; gap:10px; margin-top:14px}
+    button{flex:1; padding:10px 14px; border-radius:10px; border:0; background:var(--glass); color:var(--accent); font-weight:700; cursor:pointer}
+    button.primary{background:linear-gradient(90deg,var(--accent),#60a5fa); color:#062024}
+    .pulse{width:84px; height:84px; border-radius:50%; background:radial-gradient(circle at 40% 30%, rgba(94,234,212,0.18), transparent 30%), rgba(255,255,255,0.03); display:flex; align-items:center; justify-content:center; margin-left:auto}
+    .dot{width:28px; height:28px; border-radius:50%; background:rgba(255,255,255,0.06); transition: transform 0.08s ease, background 0.08s ease}
+    .dot.active{transform:scale(1.6); background:var(--accent)}
+    .footer{margin-top:14px; display:flex; justify-content:space-between; align-items:center}
+    .small{font-size:12px; color:var(--muted)}
+    .upload{font-size:13px; color:var(--muted); cursor:pointer; text-decoration:underline}
+    .select{background:transparent; border:1px solid rgba(255,255,255,0.04); color:var(--muted); padding:8px 10px; border-radius:8px}
+    @media (max-width:420px){.card{width:92vw}}
+  </style>
+</head>
+<body>
+  <div class="card" role="application" aria-label="Metronom">
+    <div class="row">
+      <div>
+        <h1>Atakanın Metronomu</h1>
+        <div class="muted">Hassas zamanlama, görsel geri bildirim</div>
+      </div>
+      <div class="pulse" aria-hidden="true">
+        <div class="dot" id="dot"></div>
+      </div>
+    </div>
+
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:16px">
+      <div>
+        <div class="bpm-display" id="bpm">120</div>
+        <div class="muted" id="ritim">Moderato (hafif canlı)</div>
+      </div>
+      <div style="text-align:right">
+        <div class="small">BPM</div>
+        <div class="muted" id="sub">40 - 240</div>
+      </div>
+    </div>
+
+    <div class="slider-wrap">
+      <input id="slider" type="range" min="40" max="240" value="120" />
+    </div>
+
+    <div class="controls">
+      <button id="startBtn" class="primary">Başlat</button>
+      <button id="stopBtn">Durdur</button>
+    </div>
+
+    <div class="footer">
+      <div class="small">Ton: <select id="tone" class="select"><option value="click">Kısa Click</option><option value="tick">Tık (ince)</option><option value="beep">Beep</option></select></div>
+      <div class="small">Ses yükle: <label class="upload">WAV<input id="file" type="file" accept="audio/*" style="display:none"></label></div>
+    </div>
+  </div>
+
+  <script>
+    
+    const slider = document.getElementById('slider');
+    const bpmDisplay = document.getElementById('bpm');
+    const ritimLabel = document.getElementById('ritim');
+    const dot = document.getElementById('dot');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const toneSel = document.getElementById('tone');
+    const fileInput = document.getElementById('file');
+
+    let audioCtx = null;
+    let isPlaying = false;      
+    let currentBpm = parseInt(slider.value, 10);
+
+    
+    let lookahead = 25.0;       
+    let scheduleAheadTime = 0.1; 
+    let nextNoteTime = 0.0;     
+    let timerID = null;
+
+    let clickBuffer = null; 
+
+    function ritimAdi(bpm){
+      if (bpm < 60) return 'Largo (çok yavaş)';
+      if (bpm < 76) return 'Adagio (yavaş)';
+      if (bpm < 108) return 'Andante (orta)';
+      if (bpm < 120) return 'Moderato (hafif canlı)';
+      if (bpm < 168) return 'Allegro (Atakan)';
+      return 'Presto (çok hızlı)';
+    }
+
+    function updateDisplay(){
+      bpmDisplay.textContent = currentBpm;
+      ritimLabel.textContent = ritimAdi(currentBpm);
+    }
+
+    slider.addEventListener('input', (e)=>{
+      currentBpm = parseInt(e.target.value,10);
+      updateDisplay();
+    });
+
+    startBtn.addEventListener('click', async ()=>{
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (!isPlaying){
+        isPlaying = true;
+        nextNoteTime = audioCtx.currentTime + 0.05;
+        scheduler();
+        startBtn.disabled = true;
+      }
+    });
+
+    stopBtn.addEventListener('click', ()=>{
+      isPlaying = false;
+      startBtn.disabled = false;
+      if (timerID) { clearTimeout(timerID); timerID = null; }
+    });
+
+    function scheduleNote(time){
+      
+      flash();
+
+      
+      if (clickBuffer){
+        const src = audioCtx.createBufferSource();
+        src.buffer = clickBuffer;
+        src.connect(audioCtx.destination);
+        src.start(time);
+      } else {
+        const o = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        o.type = (toneSel.value==='click') ? 'square' : (toneSel.value==='tick'?'sine':'sawtooth');
+        o.frequency.setValueAtTime((toneSel.value==='tick')?1400: (toneSel.value==='beep'?800:1200), time);
+        g.gain.setValueAtTime(0.0001, time);
+        g.gain.exponentialRampToValueAtTime(0.8, time + 0.001);
+        g.gain.exponentialRampToValueAtTime(0.0001, time + 0.05);
+        o.connect(g); g.connect(audioCtx.destination);
+        o.start(time); o.stop(time + 0.06);
+      }
+    }
+
+    function scheduler(){
+      while (nextNoteTime < audioCtx.currentTime + scheduleAheadTime){
+        scheduleNote(nextNoteTime);
+        
+        const secondsPerBeat = 60.0 / currentBpm;
+        nextNoteTime += secondsPerBeat;
+      }
+      timerID = setTimeout(scheduler, lookahead);
+      if (!isPlaying){ clearTimeout(timerID); timerID=null; }
+    }
+
+    
+    function flash(){
+      dot.classList.add('active');
+      setTimeout(()=>dot.classList.remove('active'), 80);
+    }
+
+    // atakanın müzik dosyası
+    fileInput.addEventListener('change', async (e)=>{
+      const f = e.target.files[0];
+      if (!f) return;
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const data = await f.arrayBuffer();
+      clickBuffer = await audioCtx.decodeAudioData(data);
+    });
+
+    
+    updateDisplay();
+  </script>
+</body>
+</html>
